@@ -9,3 +9,4 @@ edition = "2018"
 [dependencies]
 sdl2={version="0.34", features=["bundled"]}
 bytemuck="*"
+rand="*"

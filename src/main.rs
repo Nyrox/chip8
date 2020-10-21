@@ -28,10 +28,40 @@ const FONT_DATA: [u8; 16 * 5] = [
     0xF0, 0x80, 0xF0, 0x80, 0x80, // F
 ];
 
+use rand::prelude::*;
+use sdl2::keyboard::Scancode;
+// const KEYS: &[sdl2::keyboard::Scancode] = &[
+//     Scancode::Num1, Scancode::Num2, Scancode::Num3, Scancode::Num4,
+//     Scancode::Q, Scancode::W, Scancode::E, Scancode::R,
+//     Scancode::A, Scancode::S, Scancode::D, Scancode::F,
+//     Scancode::Z, Scancode::X, Scancode::C, Scancode::V,
+// ];
+
+const KEYS: &[sdl2::keyboard::Scancode] = &[
+    Scancode::X,
+    Scancode::Num1,
+    Scancode::Num2,
+    Scancode::Num3,
+    Scancode::Q,
+    Scancode::W,
+    Scancode::E,
+    Scancode::A,
+    Scancode::S,
+    Scancode::D,
+    Scancode::Z,
+    Scancode::C,
+    Scancode::Num4,
+    Scancode::R,
+    Scancode::F,
+    Scancode::V,
+];
+
 fn main() -> Result<(), String> {
-    // let rom = include_bytes!("../ibm.ch8");
-    let rom = include_bytes!("../BC_test.ch8");
-    // let rom = include_bytes!("../tetris.ch8");
+    let mut rng = rand::thread_rng();
+
+    let rom = include_bytes!("../ROMs/Cave.ch8");
+
+    let mut stack: Vec<u16> = Vec::new();
 
     let mut memory = vec![0u8; MEM_SIZE];
 
@@ -51,6 +81,8 @@ fn main() -> Result<(), String> {
         .build()
         .map_err(|e| e.to_string())?;
 
+    let mut event_pump = sdl_context.event_pump()?;
+
     let mut canvas = window
         .into_canvas()
         .software()
@@ -65,12 +97,21 @@ fn main() -> Result<(), String> {
 
     let mut pc: usize = ROM_MEM_BASE;
     let mut i_register: u16 = 0;
+    let mut t_delay: u8 = 0;
+    let mut t_sound: u8 = 0;
+
     let mut data_registers = [0u8; 16];
 
     let mut backbuffer = [0u8; 64 * 32];
 
     'mainloop: loop {
-        for event in sdl_context.event_pump()?.poll_iter() {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        if t_delay > 0 {
+            t_delay = t_delay - 1;
+        }
+
+        canvas.present();
+        for event in event_pump.poll_iter() {
             match event {
                 Event::Quit { .. }
                 | Event::KeyDown {
@@ -92,14 +133,21 @@ fn main() -> Result<(), String> {
         let nnn = (instruction) & 0xFFF;
 
         match op {
-            0x0 if y == 0xE => {
+            0x0 if x == 0 && y == 0xE && n == 0 => {
                 canvas.set_draw_color(COL_BLACK);
                 canvas.clear();
                 for i in backbuffer.iter_mut() {
                     *i = 0;
                 }
             }
+            0x0 if x == 0 && y == 0xE && n == 0xE => {
+                pc = stack.pop().unwrap() as usize;
+            }
             0x1 => {
+                pc = nnn as usize;
+            }
+            0x2 => {
+                stack.push(pc as u16);
                 pc = nnn as usize;
             }
             0x3 => {
@@ -121,7 +169,7 @@ fn main() -> Result<(), String> {
                 data_registers[x as usize] = nn;
             }
             0x7 => {
-                data_registers[x as usize] += nn;
+                data_registers[x as usize] = data_registers[x as usize].wrapping_add(nn);
             }
             0x8 => {
                 let vy = data_registers[y as usize];
@@ -158,8 +206,19 @@ fn main() -> Result<(), String> {
                     }
                 }
             }
+            0x9 => {
+                if data_registers[x as usize] != data_registers[y as usize] {
+                    pc += 2;
+                }
+            }
             0xA => {
                 i_register = nnn;
+            }
+            0xB => {
+                pc = nnn as usize + data_registers[0] as usize;
+            }
+            0xC => {
+                data_registers[x as usize] = nn & rng.gen::<u8>();
             }
             0xD => {
                 let base_x = (data_registers[x as usize] % 64) as usize;
@@ -168,6 +227,9 @@ fn main() -> Result<(), String> {
                 data_registers[15] = 0;
 
                 for ypos in 0..(n as usize) {
+                    if base_y + ypos >= 32 {
+                        break;
+                    }
                     let row = memory[i_register as usize + ypos as usize];
                     for xpos in 0..8 {
                         if base_x + xpos >= 64 {
@@ -193,11 +255,32 @@ fn main() -> Result<(), String> {
                             (base_y + ypos) as i32,
                         ));
                     }
-                    canvas.present();
-                    if base_y + ypos >= 32 {
-                        break;
-                    }
                 }
+            }
+            0xE if y == 0xA && n == 1 => {
+                let v = event_pump
+                    .keyboard_state()
+                    .is_scancode_pressed(KEYS[data_registers[x as usize] as usize]);
+
+                if !v {
+                    pc += 2;
+                }
+            }
+            0xE if y == 9 && n == 0xE => {
+                let v = event_pump
+                    .keyboard_state()
+                    .is_scancode_pressed(KEYS[data_registers[x as usize] as usize]);
+
+                if v {
+                    pc += 2;
+                }
+            }
+            0xF if y == 0 && n == 7 => {
+                data_registers[x as usize] = t_delay;
+            }
+            0xF if y == 1 && n == 0x5 => t_delay = data_registers[x as usize],
+            0xF if y == 1 && n == 0x8 => {
+                t_sound = data_registers[x as usize];
             }
             0xF if y == 1 && n == 0xE => {
                 i_register += data_registers[x as usize] as u16;
